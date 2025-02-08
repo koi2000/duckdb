@@ -1,0 +1,51 @@
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(50),
+    age INTEGER,
+    email VARCHAR(100)
+);
+
+INSERT INTO users (id, name, age, email) VALUES
+(1, 'Alice', 30, 'alice@example.com'),
+(2, 'Bob', 25, 'bob@example.com'),
+(3, 'Charlie', 35, 'charlie@example.com');
+
+SELECT * FROM users;
+
+SELECT * FROM users WHERE age > 30;
+
+UPDATE users SET age = 31 WHERE name = 'Alice';
+
+DELETE FROM users WHERE id = 3;
+
+SELECT COUNT(*) AS total_users FROM users;
+SELECT AVG(age) AS average_age FROM users;
+
+SELECT age, COUNT(*) AS count FROM users GROUP BY age;
+
+SELECT * FROM users ORDER BY age DESC;
+
+CREATE TABLE orders (
+    order_id INTEGER PRIMARY KEY,
+    user_id INTEGER,
+    product_name VARCHAR(100),
+    amount DECIMAL(10, 2)
+);
+
+INSERT INTO orders (order_id, user_id, product_name, amount) VALUES
+(1, 1, 'Laptop', 1200.00),
+(2, 2, 'Smartphone', 800.00),
+(3, 1, 'Tablet', 500.00);
+
+SELECT users.name, orders.product_name, orders.amount
+FROM users
+JOIN orders ON users.id = orders.user_id;
+
+SELECT name FROM users WHERE id IN (SELECT user_id FROM orders WHERE amount > 1000);
+
+CREATE VIEW user_orders AS
+SELECT users.name, orders.product_name, orders.amount
+FROM users
+JOIN orders ON users.id = orders.user_id;
+
+COPY users FROM 'path/to/users.csv' (HEADER, DELIMITER ',');

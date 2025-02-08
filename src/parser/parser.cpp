@@ -206,6 +206,7 @@ void Parser::ParseQuery(const string &query) {
 		bool parsing_succeed = false;
 		// Creating a new scope to prevent multiple PostgresParser destructors being called
 		// which led to some memory issues
+        // 借用postgres的parser，然后transform到duckdb
 		{
 			PostgresParser parser;
 			parser.Parse(query);

@@ -264,7 +264,7 @@ io_file
 # Visual Studio
 .vs
 settings.json
-.vscode
+# .vscode
 
 # QtCreator files
 *.user

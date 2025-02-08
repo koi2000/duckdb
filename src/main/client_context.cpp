@@ -822,6 +822,7 @@ unique_ptr<PendingQueryResult> ClientContext::PendingStatementOrPreparedStatemen
 		// this way we verify that the copy correctly copies all properties
 		auto copied_statement = statement->Copy();
 		switch (statement->type) {
+        // 如果是select，需要校验一下是否正确
 		case StatementType::SELECT_STATEMENT: {
 			// in case this is a select query, we verify the original statement
 			ErrorData error;
@@ -870,6 +871,7 @@ unique_ptr<PendingQueryResult> ClientContext::PendingStatementOrPreparedStatemen
 	unique_ptr<PendingQueryResult> pending;
 
 	try {
+        // 检查是否开启了auto commit
 		BeginQueryInternal(lock, query);
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
@@ -965,10 +967,12 @@ unique_ptr<QueryResult> ClientContext::Query(const string &query, bool allow_str
 	unique_ptr<QueryResult> result;
 	optional_ptr<QueryResult> last_result;
 	bool last_had_result = false;
+    // 遍历每个语句进行处理
 	for (idx_t i = 0; i < statements.size(); i++) {
 		auto &statement = statements[i];
 		bool is_last_statement = i + 1 == statements.size();
-		PendingQueryParameters parameters;
+		// 
+        PendingQueryParameters parameters;
 		parameters.allow_stream_result = allow_stream_result && is_last_statement;
 		auto pending_query = PendingQueryInternal(*lock, std::move(statement), parameters);
 		auto has_result = pending_query->properties.return_type == StatementReturnType::QUERY_RESULT;
@@ -1079,7 +1083,8 @@ unique_ptr<PendingQueryResult> ClientContext::PendingQueryInternal(ClientContext
                                                                    bool verify) {
 	auto query = statement->query;
 	shared_ptr<PreparedStatementData> prepared;
-	if (verify) {
+	// 默认路线
+    if (verify) {
 		return PendingStatementOrPreparedStatementInternal(lock, query, std::move(statement), prepared, parameters);
 	} else {
 		return PendingStatementOrPreparedStatement(lock, query, std::move(statement), prepared, parameters);
