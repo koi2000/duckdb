@@ -126,6 +126,10 @@ StringValueResult::StringValueResult(CSVStates &states, CSVStateMachine &state_m
 			SkipBOM();
 		}
 	}
+	ignore_empty_values = state_machine.dialect_options.state_machine_options.delimiter.GetValue()[0] != ' ' &&
+	                      state_machine.dialect_options.state_machine_options.quote != ' ' &&
+	                      state_machine.dialect_options.state_machine_options.escape != ' ' &&
+	                      state_machine.dialect_options.state_machine_options.comment != ' ';
 }
 
 StringValueResult::~StringValueResult() {
@@ -503,8 +507,15 @@ void StringValueResult::AddQuotedValue(StringValueResult &result, const idx_t bu
 	if (!result.unquoted) {
 		result.current_errors.Insert(UNTERMINATED_QUOTES, result.cur_col_id, result.chunk_col_id, result.last_position);
 	}
-	AddPossiblyEscapedValue(result, buffer_pos, result.buffer_ptr + result.quoted_position + 1,
-	                        buffer_pos - result.quoted_position - 2, buffer_pos < result.last_position.buffer_pos + 2);
+	// remove potential empty values
+	idx_t length = buffer_pos - result.quoted_position - 1;
+	while (length > 0 && result.ignore_empty_values &&
+	       result.buffer_ptr[result.quoted_position + 1 + length - 1] == ' ') {
+		length--;
+	}
+	length--;
+	AddPossiblyEscapedValue(result, buffer_pos, result.buffer_ptr + result.quoted_position + 1, length,
+	                        buffer_pos < result.last_position.buffer_pos + 2);
 	result.quoted = false;
 }
 
@@ -677,23 +688,29 @@ bool LineError::HandleErrors(StringValueResult &result) {
 				    line_pos.GetGlobalPosition(result.requested_size), result.path);
 			}
 			break;
-		case CAST_ERROR:
+		case CAST_ERROR: {
+			string column_name;
+			LogicalTypeId type_id;
+			if (cur_error.col_idx < result.names.size()) {
+				column_name = result.names[cur_error.col_idx];
+			}
+			if (cur_error.col_idx < result.number_of_columns) {
+				type_id = result.parse_types[cur_error.chunk_idx].type_id;
+			}
 			if (result.current_line_position.begin == line_pos) {
 				csv_error = CSVError::CastError(
-				    result.state_machine.options, result.names[cur_error.col_idx], cur_error.error_message,
-				    cur_error.col_idx, borked_line, lines_per_batch,
+				    result.state_machine.options, column_name, cur_error.error_message, cur_error.col_idx, borked_line,
+				    lines_per_batch,
 				    result.current_line_position.begin.GetGlobalPosition(result.requested_size, first_nl),
-				    line_pos.GetGlobalPosition(result.requested_size, first_nl),
-				    result.parse_types[cur_error.chunk_idx].type_id, result.path);
+				    line_pos.GetGlobalPosition(result.requested_size, first_nl), type_id, result.path);
 			} else {
 				csv_error = CSVError::CastError(
-				    result.state_machine.options, result.names[cur_error.col_idx], cur_error.error_message,
-				    cur_error.col_idx, borked_line, lines_per_batch,
+				    result.state_machine.options, column_name, cur_error.error_message, cur_error.col_idx, borked_line,
+				    lines_per_batch,
 				    result.current_line_position.begin.GetGlobalPosition(result.requested_size, first_nl),
-				    line_pos.GetGlobalPosition(result.requested_size), result.parse_types[cur_error.chunk_idx].type_id,
-				    result.path);
+				    line_pos.GetGlobalPosition(result.requested_size), type_id, result.path);
 			}
-			break;
+		} break;
 		case MAXIMUM_LINE_SIZE:
 			csv_error = CSVError::LineSizeError(
 			    result.state_machine.options, lines_per_batch, borked_line,
@@ -953,7 +970,8 @@ StringValueScanner::StringValueScanner(idx_t scanner_idx_p, const shared_ptr<CSV
       result(states, *state_machine, cur_buffer_handle, BufferAllocator::Get(buffer_manager->context), result_size,
              iterator.pos.buffer_pos, *error_handler, iterator,
              buffer_manager->context.client_data->debug_set_max_line_length, csv_file_scan, lines_read, sniffing,
-             buffer_manager->GetFilePath(), scanner_idx_p) {
+             buffer_manager->GetFilePath(), scanner_idx_p),
+      start_pos(0) {
 	iterator.buffer_size = state_machine->options.buffer_size_option.GetValue();
 }
 
@@ -965,11 +983,13 @@ StringValueScanner::StringValueScanner(const shared_ptr<CSVBufferManager> &buffe
       result(states, *state_machine, cur_buffer_handle, Allocator::DefaultAllocator(), result_size,
              iterator.pos.buffer_pos, *error_handler, iterator,
              buffer_manager->context.client_data->debug_set_max_line_length, csv_file_scan, lines_read, sniffing,
-             buffer_manager->GetFilePath(), 0) {
+             buffer_manager->GetFilePath(), 0),
+      start_pos(0) {
 	iterator.buffer_size = state_machine->options.buffer_size_option.GetValue();
 }
 
-unique_ptr<StringValueScanner> StringValueScanner::GetCSVScanner(ClientContext &context, CSVReaderOptions &options) {
+unique_ptr<StringValueScanner> StringValueScanner::GetCSVScanner(ClientContext &context, CSVReaderOptions &options,
+                                                                 const MultiFileReaderOptions &file_options) {
 	auto state_machine = make_shared_ptr<CSVStateMachine>(options, options.dialect_options.state_machine_options,
 	                                                      CSVStateMachineCache::Get(context));
 
@@ -982,7 +1002,7 @@ unique_ptr<StringValueScanner> StringValueScanner::GetCSVScanner(ClientContext &
 	auto it = BaseScanner::SkipCSVRows(buffer_manager, state_machine, rows_to_skip);
 	auto scanner = make_uniq<StringValueScanner>(buffer_manager, state_machine, make_shared_ptr<CSVErrorHandler>(),
 	                                             STANDARD_VECTOR_SIZE, it);
-	scanner->csv_file_scan = make_shared_ptr<CSVFileScan>(context, options.file_path, options);
+	scanner->csv_file_scan = make_shared_ptr<CSVFileScan>(context, options.file_path, options, file_options);
 	scanner->csv_file_scan->InitializeProjection();
 	return scanner;
 }
@@ -1365,8 +1385,12 @@ void StringValueScanner::ProcessOverBufferValue() {
 	if (!skip_value) {
 		string_t value;
 		if (result.quoted && !result.comment) {
-			value = string_t(over_buffer_string.c_str() + result.quoted_position,
-			                 UnsafeNumericCast<uint32_t>(over_buffer_string.size() - 1 - result.quoted_position));
+			idx_t length = over_buffer_string.size() - 1 - result.quoted_position;
+			while (length > 0 && result.ignore_empty_values &&
+			       over_buffer_string.c_str()[result.quoted_position + length] == ' ') {
+				length--;
+			}
+			value = string_t(over_buffer_string.c_str() + result.quoted_position, UnsafeNumericCast<uint32_t>(length));
 			if (result.escaped) {
 				if (!result.HandleTooManyColumnsError(over_buffer_string.c_str(), over_buffer_string.size())) {
 					const auto str_ptr = over_buffer_string.c_str() + result.quoted_position;

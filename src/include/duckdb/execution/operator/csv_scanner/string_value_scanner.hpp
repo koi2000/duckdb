@@ -121,8 +121,8 @@ private:
 };
 
 struct ParseTypeInfo {
-	ParseTypeInfo() {};
-	ParseTypeInfo(const LogicalType &type, bool validate_utf_8_p) : validate_utf8(validate_utf_8_p) {
+	ParseTypeInfo() : validate_utf8(false), type_id(), internal_type(), scale(0), width(0) {};
+	ParseTypeInfo(const LogicalType &type, const bool validate_utf_8_p) : validate_utf8(validate_utf_8_p) {
 		type_id = type.id();
 		internal_type = type.InternalType();
 		if (type.id() == LogicalTypeId::DECIMAL) {
@@ -217,6 +217,8 @@ public:
 	//! (i.e., non-comment) line.
 	bool first_line_is_comment = false;
 
+	bool ignore_empty_values = true;
+
 	//! Specialized code for quoted values, makes sure to remove quotes and escapes
 	static inline void AddQuotedValue(StringValueResult &result, const idx_t buffer_pos);
 	//! Specialized code for possibly escaped values, makes sure to remove escapes
@@ -289,7 +291,8 @@ public:
 	void Flush(DataChunk &insert_chunk);
 
 	//! Function that creates and returns a non-boundary CSV Scanner, can be used for internal csv reading.
-	static unique_ptr<StringValueScanner> GetCSVScanner(ClientContext &context, CSVReaderOptions &options);
+	static unique_ptr<StringValueScanner> GetCSVScanner(ClientContext &context, CSVReaderOptions &options,
+	                                                    const MultiFileReaderOptions &file_options);
 
 	bool FinishedIterator() const;
 
